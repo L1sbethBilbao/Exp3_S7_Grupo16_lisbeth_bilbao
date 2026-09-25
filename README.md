@@ -1,46 +1,52 @@
-# Banco XYZ - Semana 6 (Spring Cloud)
+# Banco XYZ - Semana 7 (Kafka + Resilience4j)
 
-Entrega: `Exp3_S6_lisbeth_bilbao_Grupo_16`
+Entrega: `Exp3_S7_Grupo16_lisbeth_bilbao`
 
-Continuidad del Banco XYZ (BFF Web / Movil / Cajero + `ms-cuentas`) evolucionada con:
+Continuidad de la Semana 6 (Config Server, Eureka, Resilience4j, Security) + **arquitectura orientada a eventos con Apache Kafka** en EC2.
 
-1. **Config Server** (configuracion centralizada)
-2. **Eureka** (Service Discovery + llamada por nombre logico)
-3. **Resilience4j** (Circuit Breaker + Retry + Fallback en los 3 BFF)
-4. **Spring Security** (HTTP Basic en BFF + Basic/OAuth2 JWT en `ms-cuentas`)
+## Arquitectura de eventos elegida
 
-Alineado a la clase del profesor (ejemplos Config Server, Eureka, Resilience4j y OAuth2) y a la pauta de evaluacion (maximo puntaje).
+**Patron:** Publicacion / Suscripcion (Event-Driven / Pub-Sub)
 
-## Arquitectura
+- **Productor:** `ms-cuentas` publica un evento cuando se realiza un **retiro**.
+- **Topico:** `bancoxyz.transacciones` (3 particiones, replication factor 2).
+- **Consumidor:** `ms-auditoria` (consumer group `ms-auditoria`) lee el evento y lo registra para auditoria.
+- **Resilience4j:** se mantiene en los 3 BFF (Circuit Breaker + Retry + Fallback).
 
 ```
-Postman / cliente
-   |  HTTP Basic (web/movil/cajero)
-   v
-bff-web :8091  ----\ 
-bff-movil :8092 ----+--> Eureka :8761  -->  MS-CUENTAS :8090  (/core/**)
-bff-cajero :8093 --/         ^                    |
-                             |                    +--> /api/basic/**  (HTTP Basic)
-Config Server :8888 ----------+                    +--> /api/oauth2/** (JWT)
-                             |
-Auth Server :9000  (emite JWT client_credentials)
+Cliente / Postman
+      |
+      v
+bff-cajero :8093  --HTTP-->  ms-cuentas :8090  --evento-->  Kafka (EC2)
+   (Resilience4j)              (productor)                      |
+                                                                v
+                                                         ms-auditoria :8094
+                                                            (consumidor)
 ```
+
+Cluster Kafka (EC2 + Elastic IP `52.204.221.241`):
+- Brokers: `29092`, `39092`, `49092`
+- Kafka UI: http://52.204.221.241:8090
+- Compose del cluster: `infra/kafka/docker-compose.yml` (ver `infra/kafka/README.md`)
 
 ## Proyectos
 
 | Carpeta | Puerto | Rol |
 | --- | --- | --- |
-| `config-server` | 8888 | Configuracion central (native / classpath) |
+| `config-server` | 8888 | Configuracion central |
 | `discovery-server` | 8761 | Eureka |
 | `auth-server` | 9000 | OAuth2 Authorization Server |
-| `ms-cuentas` | 8090 | Core + demos Basic/OAuth2 |
-| `bff-web` | 8091 | BFF Web + Resilience4j + Basic |
-| `bff-movil` | 8092 | BFF Movil + Resilience4j + Basic |
-| `bff-cajero` | 8093 | BFF Cajero + Resilience4j + Basic |
+| `ms-cuentas` | 8090 | Core + **productor Kafka** |
+| `ms-auditoria` | 8094 | **Consumidor Kafka** (auditoria) |
+| `bff-web` | 8091 | BFF Web + Resilience4j |
+| `bff-movil` | 8092 | BFF Movil + Resilience4j |
+| `bff-cajero` | 8093 | BFF Cajero + Resilience4j |
+| `infra/kafka` | — | Docker Compose cluster Kafka en EC2 |
 
-## Orden de arranque (importante)
+## Orden de arranque
 
-Abre **6 terminales** (o mas) y ejecuta en este orden:
+1. Kafka en EC2 ya levantado (`docker compose up -d` con `infra/kafka/docker-compose.yml`, tipicamente en `~/kafka`).
+2. En tu PC, terminales en este orden:
 
 ```powershell
 cd config-server
@@ -63,12 +69,7 @@ mvn spring-boot:run
 ```
 
 ```powershell
-cd bff-web
-mvn spring-boot:run
-```
-
-```powershell
-cd bff-movil
+cd ms-auditoria
 mvn spring-boot:run
 ```
 
@@ -77,66 +78,48 @@ cd bff-cajero
 mvn spring-boot:run
 ```
 
-Requisitos: JDK 17+, Maven, wallet Oracle de semanas anteriores (ruta en `ms-cuentas` `application.properties`).
+(Opcional: `bff-web` y `bff-movil` para evidencias Resilience4j / canales.)
 
-## Credenciales (Postman - Auth Type: Basic Auth)
+Requisitos: JDK 17+, Maven, wallet Oracle (ruta en `ms-cuentas/application.properties`), cluster Kafka accesible.
 
-| Servicio | Usuario | Password | Rol |
-| --- | --- | --- | --- |
-| bff-web | `web` | `web123` | WEB |
-| bff-movil | `movil` | `movil123` | MOVIL |
-| bff-cajero | `cajero` | `cajero123` | CAJERO |
-| ms-cuentas Basic | `user` | `password123` | USER |
-| ms-cuentas Basic admin | `admin` | `admin123` | ADMIN |
+## Como probar el flujo Kafka (evidencia S7)
 
-### OAuth2 (auth-server)
+1. Retiro via BFF cajero (Basic Auth `cajero` / `cajero123`):
 
-- Token URL: `http://localhost:9000/oauth2/token`
-- Grant type: `client_credentials`
-- Client ID: `bancoxyz-bff-client`
-- Client Secret: `secret123`
-- Scope: `cuentas.read`
+```http
+POST http://localhost:8093/bff/cajero/cuentas/101/retiro
+Content-Type: application/json
 
-## Endpoints utiles
+{"monto": 100}
+```
 
-### Config Server
-- `GET http://localhost:8888/ms-cuentas/default`
-- `GET http://localhost:8888/bff-web/default`
+2. Ver mensaje en Kafka UI: http://52.204.221.241:8090 → Topics → `bancoxyz.transacciones` → Messages.
 
-### Eureka
-- Dashboard: `http://localhost:8761`
-- Deben aparecer: `MS-CUENTAS`, `BFF-WEB`, `BFF-MOVIL`, `BFF-CAJERO`
+3. Ver que el consumidor lo proceso:
 
-### ms-cuentas (seguridad clase)
-- `GET http://localhost:8090/api/publico/info` (sin auth; muestra mensaje del Config Server)
-- `GET http://localhost:8090/api/basic/cuentas` (Basic user/password123)
-- `GET http://localhost:8090/api/basic/admin/cuentas` (solo admin)
-- `GET http://localhost:8090/api/oauth2/cuentas` (Bearer JWT)
+```http
+GET http://localhost:8094/auditoria/eventos
+```
 
-### BFF (Basic Auth)
-- `GET http://localhost:8091/bff/web/cuentas` (web / web123)
-- `GET http://localhost:8092/bff/movil/cuentas` (movil / movil123)
-- `GET http://localhost:8093/bff/cajero/saldo/101` (cajero / cajero123)
-- `POST http://localhost:8093/bff/cajero/cuentas/101/retiro` body `{"monto":100}`
+Tambien revisa el log de `ms-auditoria` (`AUDITORIA OK ...`) y el de `ms-cuentas` (`Evento Kafka publicado ...`).
 
-### Resilience4j
-- `GET http://localhost:8091/actuator/health`
-- `GET http://localhost:8091/actuator/circuitbreakers`
-- Para forzar fallback: detener `ms-cuentas` y volver a llamar el BFF.
+## Credenciales (igual Semana 6)
 
-## Criterios de la pauta cubiertos
+| Servicio | Usuario | Password |
+| --- | --- | --- |
+| bff-cajero | `cajero` | `cajero123` |
+| bff-web | `web` | `web123` |
+| bff-movil | `movil` | `movil123` |
 
-1. Config Server integrado con microservicios (ms-cuentas + 3 BFF)
-2. Eureka con al menos 3 microservicios registrados + llamada `http://MS-CUENTAS/...`
-3. 3 BFF con tolerancia a fallos (Resilience4j) y autenticacion (HTTP Basic)
-4. Auth + autorizacion (Basic con roles + OAuth2 JWT con scopes)
+## Criterios de la pauta (Semana 7)
 
-## Evidencias
-
-Sigue el documento: `../guia_capturas_semana_6.txt` (ruta `semana_6_backend`).
+1. Arquitectura de eventos definida (Pub/Sub) adecuada a transacciones bancarias.
+2. Diagrama de topicos/mensajes/eventos (incluir en evidencias / diagrama del grupo).
+3. Resilience4j en BFF (continuidad S6).
+4. Kafka funcional: productor (`ms-cuentas`) + consumidor (`ms-auditoria`) con mensajes procesados.
 
 ## Version
 
-- Java 17, Spring Boot 3.3.5, Spring Cloud 2023.0.3
+- Java 17, Spring Boot 3.3.5, Spring Cloud 2023.0.3, spring-kafka
 - Resilience4j 2.1.0
 - Grupo 16 / Lisbeth Bilbao

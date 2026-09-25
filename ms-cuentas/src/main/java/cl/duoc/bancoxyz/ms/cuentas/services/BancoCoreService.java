@@ -1,8 +1,10 @@
 package cl.duoc.bancoxyz.ms.cuentas.services;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.UUID;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -13,20 +15,25 @@ import cl.duoc.bancoxyz.ms.cuentas.dtos.TransaccionCoreDTO;
 import cl.duoc.bancoxyz.ms.cuentas.entities.CuentaEntity;
 import cl.duoc.bancoxyz.ms.cuentas.entities.MovimientoEntity;
 import cl.duoc.bancoxyz.ms.cuentas.entities.TransaccionEntity;
+import cl.duoc.bancoxyz.ms.cuentas.events.TransaccionEvento;
 import cl.duoc.bancoxyz.ms.cuentas.exceptions.CuentaNoEncontradaException;
 import cl.duoc.bancoxyz.ms.cuentas.exceptions.SaldoInsuficienteException;
+import cl.duoc.bancoxyz.ms.cuentas.kafka.TransaccionEventPublisher;
 import cl.duoc.bancoxyz.ms.cuentas.repositories.CuentaRepository;
 import cl.duoc.bancoxyz.ms.cuentas.repositories.MovimientoRepository;
 import cl.duoc.bancoxyz.ms.cuentas.repositories.TransaccionRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class BancoCoreService {
 
     private final CuentaRepository cuentaRepository;
     private final MovimientoRepository movimientoRepository;
     private final TransaccionRepository transaccionRepository;
+    private final TransaccionEventPublisher transaccionEventPublisher;
 
     public List<CuentaCoreDTO> listarCuentas() {
         return cuentaRepository.findAll().stream().map(this::aCuenta).toList();
@@ -60,6 +67,22 @@ public class BancoCoreService {
         cuentaRepository.save(cuenta);
         movimientoRepository.save(new MovimientoEntity(
                 null, cuentaId, LocalDate.now(), "retiro", monto, "Retiro en cajero"));
+
+        // Publicacion asincrona: si Kafka falla, el retiro ya quedo persistido (desacoplamiento).
+        TransaccionEvento evento = new TransaccionEvento(
+                UUID.randomUUID().toString(),
+                cuentaId,
+                "retiro",
+                monto,
+                cuenta.getSaldo(),
+                Instant.now(),
+                "ms-cuentas");
+        try {
+            transaccionEventPublisher.publicar(evento);
+        } catch (Exception ex) {
+            log.error("Retiro OK en BD, pero no se pudo publicar evento Kafka cuenta={}", cuentaId, ex);
+        }
+
         return aCuenta(cuenta);
     }
 

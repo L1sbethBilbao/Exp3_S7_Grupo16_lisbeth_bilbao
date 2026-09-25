@@ -10,15 +10,24 @@ eureka:
     prefer-ip-address: true
 
 bancoxyz:
-  mensaje: "Config cargada desde Config Server - ms-cuentas Semana 6"
-  ambiente: cloud-s6
+  mensaje: "Config cargada desde Config Server - ms-cuentas Semana 7 (Kafka)"
+  ambiente: cloud-s7
 
 spring:
   jpa:
     open-in-view: false
     hibernate:
       ddl-auto: update
+  kafka:
+    bootstrap-servers: 52.204.221.241:29092,52.204.221.241:39092,52.204.221.241:49092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      acks: all
+      properties:
+        spring.json.add.type.headers: false
 
 logging:
   level:
     cl.duoc.bancoxyz.ms: INFO
+    org.springframework.kafka: INFO
